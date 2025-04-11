@@ -1,321 +1,262 @@
-local library = {}
-local windowCount = 0
-local sizes = {}
-local listOffset = {}
-local pastSliders = {}
-local dropdowns = {}
-local destroyed
+-- Services
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = game:GetService("Players").LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local HttpService = game:GetService("HttpService")
 
-local colorPickers = {}
-
-if game.CoreGui:FindFirstChild('MesohicUiLib') then
-    game.CoreGui:FindFirstChild('MesohicUiLib'):Destroy()
-    destroyed = true
-end
-
-local function Lerp(a, b, c)
-    return a + ((b - a) * c)
-end
-
-local players = game:GetService('Players')
-local player = players.LocalPlayer
-local mouse = player:GetMouse()
-local run = game:GetService('RunService')
-local stepped = run.Stepped
-
-local function Dragify(obj)
-    spawn(function()
-        local initial, isDragging
-        obj.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                isDragging = true
-                local minitial = input.Position
-                initial = obj.Position
-                local con
-                con = stepped:Connect(function()
-                    if isDragging then
-                        local delta = Vector2.new(mouse.X, mouse.Y) - minitial
-                        obj.Position = UDim2.new(initial.X.Scale, initial.X.Offset + delta.X, initial.Y.Scale, initial.Y.Offset + delta.Y)
-                    else
-                        con:Disconnect()
-                    end
-                end)
-                input.Changed:Connect(function()
-                    if input.UserInputState == Enum.UserInputState.End then
-                        isDragging = false
-                    end
-                end)
-            end
-        end)
-    end)
-end
-
-local function protect_gui(obj) 
-    if destroyed then
-        obj.Parent = game.CoreGui
-        return
-    end
-    if syn and syn.protect_gui then
-        syn.protect_gui(obj)
-    end
-    obj.Parent = game.CoreGui
-end
-
-local MesohicUiLib = Instance.new("ScreenGui")
-MesohicUiLib.Name = "MesohicUiLib"
-protect_gui(MesohicUiLib)
-
-local xOffset = 20
-local uis = game:GetService("UserInputService")
-local keybindConnection
-
-local themes = {
-    ["Default"] = {
-        primary = Color3.fromRGB(0, 151, 230),
-        secondary = Color3.fromRGB(0, 168, 255),
-        background = Color3.fromRGB(47, 54, 64),
-        text = Color3.fromRGB(245, 246, 250)
+-- Orion Library Initialization
+local OrionLib = {
+    Elements = {},
+    ThemeObjects = {},
+    Connections = {},
+    Flags = {},
+    Themes = {
+        Default = {
+            Main = Color3.fromRGB(25, 25, 25),
+            Second = Color3.fromRGB(32, 32, 32),
+            Stroke = Color3.fromRGB(60, 60, 60),
+            Divider = Color3.fromRGB(60, 60, 60),
+            Text = Color3.fromRGB(240, 240, 240),
+            TextDark = Color3.fromRGB(150, 150, 150)
+        }
     },
-    ["Dark"] = {
-        primary = Color3.fromRGB(0, 0, 0),
-        secondary = Color3.fromRGB(30, 30, 30),
-        background = Color3.fromRGB(20, 20, 20),
-        text = Color3.fromRGB(255, 255, 255)
-    },
-    ["Light"] = {
-        primary = Color3.fromRGB(230, 230, 230),
-        secondary = Color3.fromRGB(255, 255, 255),
-        background = Color3.fromRGB(245, 246, 250),
-        text = Color3.fromRGB(47, 54, 64)
-    },
-    ["Red"] = {
-        primary = Color3.fromRGB(230, 0, 0),
-        secondary = Color3.fromRGB(255, 51, 51),
-        background = Color3.fromRGB(64, 0, 0),
-        text = Color3.fromRGB(250, 250, 250)
-    }
+    SelectedTheme = "Default",
+    Folder = nil,
+    SaveCfg = false
 }
 
-local currentTheme = themes["Default"]
+-- Load Feather Icons
+local Icons = {}
+local Success, Response = pcall(function()
+    Icons = HttpService:JSONDecode(
+        game:HttpGetAsync("https://raw.githubusercontent.com/evoincorp/lucideblox/master/src/modules/util/icons.json")
+    ).icons
+end)
 
-function library:SetTheme(theme)
-    if themes[theme] then
-        currentTheme = themes[theme]
-    else
-        warn("Theme not found! Using default theme.")
-        currentTheme = themes["Default"]
-    end
+if not Success then
+    warn("Orion Library - Failed to load Feather Icons. Error code: " .. Response)
 end
 
-function library:Destroy()
-    MesohicUiLib:Destroy()
-    if keybindConnection then
-        keybindConnection:Disconnect()
-    end
+local function GetIcon(IconName)
+    return Icons[IconName] or nil
 end
 
-function library:Hide()
-    MesohicUiLib.Enabled = not MesohicUiLib.Enabled
-end	
+-- GUI Setup
+local Orion = Instance.new("ScreenGui")
+Orion.Name = "Orion"
+if syn then
+    syn.protect_gui(Orion)
+    Orion.Parent = game.CoreGui
+else
+    Orion.Parent = gethui() or game.CoreGui
+end
 
-function library:Keybind(key)
-    if keybindConnection then keybindConnection:Disconnect() end
-    keybindConnection = uis.InputBegan:Connect(function(input, gp)
-        if not gp and input.KeyCode == Enum.KeyCode[key] then
-            MesohicUiLib.Enabled = not MesohicUiLib.Enabled
+-- Prevent multiple instances of Orion
+if gethui then
+    for _, Interface in ipairs(gethui():GetChildren()) do
+        if Interface.Name == Orion.Name and Interface ~= Orion then
+            Interface:Destroy()
         end
+    end
+else
+    for _, Interface in ipairs(game.CoreGui:GetChildren()) do
+        if Interface.Name == Orion.Name and Interface ~= Orion then
+            Interface:Destroy()
+        end
+    end
+end
+
+-- Utility Functions
+local function AddConnection(Signal, Function)
+    if not OrionLib:IsRunning() then return end
+    local SignalConnect = Signal:Connect(Function)
+    table.insert(OrionLib.Connections, SignalConnect)
+    return SignalConnect
+end
+
+local function Create(Name, Properties, Children)
+    local Object = Instance.new(Name)
+    for i, v in next, Properties or {} do
+        Object[i] = v
+    end
+    for i, v in next, Children or {} do
+        v.Parent = Object
+    end
+    return Object
+end
+
+local function Round(Number, Factor)
+    local Result = math.floor(Number / Factor + (math.sign(Number) * 0.5)) * Factor
+    return Result < 0 and Result + Factor or Result
+end
+
+local function ReturnProperty(Object)
+    if Object:IsA("Frame") or Object:IsA("TextButton") then
+        return "BackgroundColor3"
+    elseif Object:IsA("ScrollingFrame") then
+        return "ScrollBarImageColor3"
+    elseif Object:IsA("UIStroke") then
+        return "Color"
+    elseif Object:IsA("TextLabel") or Object:IsA("TextBox") then
+        return "TextColor3"
+    elseif Object:IsA("ImageLabel") or Object:IsA("ImageButton") then
+        return "ImageColor3"
+    end
+end
+
+-- Theme Management
+local function AddThemeObject(Object, Type)
+    if not OrionLib.ThemeObjects[Type] then
+        OrionLib.ThemeObjects[Type] = {}
+    end
+    table.insert(OrionLib.ThemeObjects[Type], Object)
+    Object[ReturnProperty(Object)] = OrionLib.Themes[OrionLib.SelectedTheme][Type]
+    return Object
+end
+
+local function SetTheme()
+    for Name, Type in pairs(OrionLib.ThemeObjects) do
+        for _, Object in pairs(Type) do
+            Object[ReturnProperty(Object)] = OrionLib.Themes[OrionLib.SelectedTheme][Name]
+        end
+    end
+end
+
+-- Configuration Functions
+local function LoadCfg(Config)
+    local Data = HttpService:JSONDecode(Config)
+    for a, b in pairs(Data) do
+        if OrionLib.Flags[a] then
+            spawn(function()
+                if OrionLib.Flags[a].Type == "Colorpicker" then
+                    OrionLib.Flags[a]:Set(UnpackColor(b))
+                else
+                    OrionLib.Flags[a]:Set(b)
+                end
+            end)
+        else
+            warn("Orion Library Config Loader - Could not find ", a, b)
+        end
+    end
+end
+
+local function SaveCfg(Name)
+    local Data = {}
+    for i, v in pairs(OrionLib.Flags) do
+        if v.Save then
+            if v.Type == "Colorpicker" then
+                Data[i] = PackColor(v.Value)
+            else
+                Data[i] = v.Value
+            end
+        end
+    end
+    writefile(OrionLib.Folder .. "/" .. Name .. ".txt", tostring(HttpService:JSONEncode(Data)))
+end
+
+-- Notification System
+local NotificationHolder = Create("Frame", {
+    Position = UDim2.new(1, -25, 1, -25),
+    Size = UDim2.new(0, 300, 1, -25),
+    AnchorPoint = Vector2.new(1, 1)
+})
+
+function OrionLib:MakeNotification(NotificationConfig)
+    spawn(function()
+        NotificationConfig.Name = NotificationConfig.Name or "Notification"
+        NotificationConfig.Content = NotificationConfig.Content or "Test"
+        NotificationConfig.Image = NotificationConfig.Image or "rbxassetid://4384403532"
+        NotificationConfig.Time = NotificationConfig.Time or 15
+
+        local NotificationParent = Create("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            Parent = NotificationHolder
+        })
+
+        local NotificationFrame = Create("Frame", {
+            Parent = NotificationParent,
+            Size = UDim2.new(1, 0, 0, 0),
+            Position = UDim2.new(1, -55, 0, 0)
+        })
+
+        -- Animation Logic
+        -- (Add tweening and animation code here)
+        
+        wait(NotificationConfig.Time)
+        NotificationFrame:Destroy()
     end)
 end
 
-function library:Window(name) 
-    windowCount = windowCount + 1
-    local winCount = windowCount
-    local zindex = winCount * 7
-    local UiWindow = Instance.new("Frame")
-
-    UiWindow.Name = "UiWindow"
-    UiWindow.Parent = MesohicUiLib
-    UiWindow.BackgroundColor3 = currentTheme.primary
-    UiWindow.Position = UDim2.new(0, xOffset, 0, 20)
-    UiWindow.Size = UDim2.new(0, 207, 0, 33)
-    UiWindow.ZIndex = 4 + zindex
-    UiWindow.Active = true
-    Dragify(UiWindow)
-
-    xOffset = xOffset + 230
-
-    local Header = Instance.new("Frame")
-    Header.Name = "Header"
-    Header.Parent = UiWindow
-    Header.BackgroundColor3 = currentTheme.secondary
-    Header.Position = UDim2.new(0, 0, -0.0202544238, 0)
-    Header.Size = UDim2.new(0, 207, 0, 26)
-    Header.ZIndex = 5 + zindex
-
-    local HeaderText = Instance.new("TextLabel")
-    HeaderText.Name = "HeaderText"
-    HeaderText.Parent = Header
-    HeaderText.BackgroundTransparency = 1.000
-    HeaderText.Position = UDim2.new(0, 0, -0.0020698905, 0)
-    HeaderText.Size = UDim2.new(0, 206, 0, 33)
-    HeaderText.ZIndex = 6 + zindex
-    HeaderText.Font = Enum.Font.SourceSans
-    HeaderText.Text = name or "Window"
-    HeaderText.TextColor3 = currentTheme.text
-    HeaderText.TextSize = 17.000
-
-    local Minimise = Instance.new("TextButton")
-    local Window = Instance.new("Frame")
-    Minimise.Name = "Minimise"
-    Minimise.Parent = Header
-    Minimise.BackgroundColor3 = currentTheme.secondary
-    Minimise.Position = UDim2.new(0, 185, 0, 2)
-    Minimise.Size = UDim2.new(0, 22, 0, 22)
-    Minimise.ZIndex = 7 + zindex
-    Minimise.Font = Enum.Font.SourceSansLight
-    Minimise.Text = "_"
-    Minimise.TextColor3 = currentTheme.text
-    Minimise.TextSize = 20.000
-    Minimise.MouseButton1Up:Connect(function()
-        Window.Visible = not Window.Visible
-        Minimise.Text = Window.Visible and "_" or "+"
-    end)
-
-    Window.Name = "Window"
-    Window.Parent = Header
-    Window.BackgroundColor3 = currentTheme.background
-    Window.Position = UDim2.new(0, 0, 0, 0)
-    Window.Size = UDim2.new(0, 207, 0, 33)
-    Window.ZIndex = 1 + zindex
-
-    local functions = {}
-    functions.__index = functions
-    functions.Ui = UiWindow
-
-    sizes[winCount] = 33
-    listOffset[winCount] = 10
-
-    function functions:Destroy()
-        self.Ui:Destroy()
-    end
-
-    function functions:Button(name, callback)
-        local Button = Instance.new("TextButton")
-        listOffset[winCount] = listOffset[winCount] + 32
-        Button.Name = "Button"
-        Button.Parent = Window
-        Button.BackgroundColor3 = currentTheme.background
-        Button.Position = UDim2.new(0, 12, 0, listOffset[winCount])
-        Button.Size = UDim2.new(0, 182, 0, 26)
-        Button.ZIndex = 2 + zindex
-        Button.Font = Enum.Font.SourceSans
-        Button.TextColor3 = currentTheme.text
-        Button.TextSize = 16.000
-        Button.Text = name or "Button"
-        Button.MouseButton1Down:Connect(callback)
-        sizes[winCount] = sizes[winCount] + 32
-        Window.Size = UDim2.new(0, 207, 0, sizes[winCount] + 10)
-    end
-
-    function functions:Label(text, color)
-        local Label = Instance.new("TextLabel")
-        Label.Name = "Label"
-        Label.Parent = Window
-        Label.BackgroundTransparency = 1.000
-        Label.Position = UDim2.new(0, 0, 0, listOffset[winCount])
-        Label.Size = UDim2.new(0, 206, 0, 29)
-        Label.Font = Enum.Font.SourceSans
-        Label.Text = text or "Label"
-        Label.TextSize = 16.000
-        Label.ZIndex = 2 + zindex
-        Label.TextColor3 = color or currentTheme.text
-
-        sizes[winCount] = sizes[winCount] + 32
-        Window.Size = UDim2.new(0, 207, 0, sizes[winCount] + 10)
-        listOffset[winCount] = listOffset[winCount] + 32
-        return Label
-    end
-
-    function functions:Toggle(text, on, callback)
-        local ToggleDescription = Instance.new("TextLabel")
-        local ToggleButton = Instance.new("TextButton")
-        local ToggleFiller = Instance.new("Frame")
-
-        ToggleDescription.Name = "ToggleDescription"
-        ToggleDescription.Parent = Window
-        ToggleDescription.BackgroundTransparency = 1.000
-        ToggleDescription.Position = UDim2.new(0, 14, 0, listOffset[winCount])
-        ToggleDescription.Size = UDim2.new(0, 131, 0, 26)
-        ToggleDescription.Font = Enum.Font.SourceSans
-        ToggleDescription.Text = text or "Toggle"
-        ToggleDescription.TextColor3 = currentTheme.text
-        ToggleDescription.TextSize = 16.000
-        ToggleDescription.TextXAlignment = Enum.TextXAlignment.Left
-        ToggleDescription.ZIndex = 2 + zindex
-
-        ToggleButton.Name = "ToggleButton"
-        ToggleButton.Parent = ToggleDescription
-        ToggleButton.BackgroundColor3 = currentTheme.background
-        ToggleButton.Position = UDim2.new(1.2061069, 0, 0.0769230798, 0)
-        ToggleButton.Size = UDim2.new(0, 22, 0, 22)
-        ToggleButton.Font = Enum.Font.SourceSans
-        ToggleButton.Text = ""
-        ToggleButton.ZIndex = 2 + zindex
-        ToggleButton.MouseButton1Up:Connect(function()
-            ToggleFiller.Visible = not ToggleFiller.Visible
-            callback(ToggleFiller.Visible)
+-- Main Window Initialization
+function OrionLib:Init()
+    if OrionLib.SaveCfg then
+        pcall(function()
+            if isfile(OrionLib.Folder .. "/" .. game.GameId .. ".txt") then
+                LoadCfg(readfile(OrionLib.Folder .. "/" .. game.GameId .. ".txt"))
+                OrionLib:MakeNotification({
+                    Name = "Configuration",
+                    Content = "Auto-loaded configuration for the game " .. game.GameId .. ".",
+                    Time = 5
+                })
+            end
         end)
-
-        ToggleFiller.Name = "ToggleFiller"
-        ToggleFiller.Parent = ToggleButton
-        ToggleFiller.BackgroundColor3 = Color3.fromRGB(68, 189, 50)
-        ToggleFiller.Position = UDim2.new(0, 5, 0, 5)
-        ToggleFiller.Size = UDim2.new(0, 12, 0, 12)
-        ToggleFiller.Visible = on
-        ToggleFiller.ZIndex = 2 + zindex
-
-        sizes[winCount] = sizes[winCount] + 32
-        Window.Size = UDim2.new(0, 207, 0, sizes[winCount] + 10)
-        listOffset[winCount] = listOffset[winCount] + 32
     end
-
-    function functions:Box(text, callback)
-        local TextBox = Instance.new("TextBox")
-        TextBox.Parent = Window
-        TextBox.BackgroundColor3 = currentTheme.background
-        TextBox.Position = UDim2.new(0, 99, 0, listOffset[winCount])
-        TextBox.Size = UDim2.new(0, 95, 0, 26)
-        TextBox.Font = Enum.Font.SourceSans
-        TextBox.PlaceholderColor3 = currentTheme.text
-        TextBox.PlaceholderText = "..."
-        TextBox.TextColor3 = currentTheme.text
-        TextBox.TextSize = 16.000
-        TextBox.ZIndex = 2 + zindex
-        TextBox:GetPropertyChangedSignal('Text'):Connect(function()
-            callback(TextBox.Text, false)
-        end)
-
-        local BoxDescription = Instance.new("TextLabel")
-        BoxDescription.Name = "BoxDescription"
-        BoxDescription.Parent = TextBox
-        BoxDescription.BackgroundTransparency = 1.000
-        BoxDescription.Position = UDim2.new(-0.894736826, 0, 0, 0)
-        BoxDescription.Size = UDim2.new(0, 75, 0, 26)
-        BoxDescription.Font = Enum.Font.SourceSans
-        BoxDescription.Text = text or "Box"
-        BoxDescription.TextColor3 = currentTheme.text
-        BoxDescription.TextSize = 16.000
-        BoxDescription.ZIndex = 2 + zindex
-
-        sizes[winCount] = sizes[winCount] + 32
-        Window.Size = UDim2.new(0, 207, 0, sizes[winCount] + 10)
-        listOffset[winCount] = listOffset[winCount] + 32
-    end
-
-    -- Add other functions (Slider, Dropdown, ColorPicker) similarly...
-
-    return functions
 end
 
-return library
+function OrionLib:MakeWindow(WindowConfig)
+    -- Window Configuration
+    WindowConfig = WindowConfig or {}
+    WindowConfig.Name = WindowConfig.Name or "Orion Library"
+    WindowConfig.ConfigFolder = WindowConfig.ConfigFolder or WindowConfig.Name
+    WindowConfig.SaveConfig = WindowConfig.SaveConfig or false
 
+    -- Main Window Creation
+    local MainWindow = Create("Frame", {
+        Size = UDim2.new(0, 615, 0, 344),
+        Position = UDim2.new(0.5, -307, 0.5, -172),
+        Parent = Orion
+    })
+
+    -- Dragging Functionality
+    local DragPoint = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 50)
+    })
+    -- (Add dragging functionality code here)
+
+    -- Tab Creation
+    local TabFunction = {}
+    function TabFunction:MakeTab(TabConfig)
+        -- Tab Configuration
+        TabConfig = TabConfig or {}
+        TabConfig.Name = TabConfig.Name or "Tab"
+
+        local TabFrame = Create("TextButton", {
+            Size = UDim2.new(1, 0, 0, 30),
+            Parent = TabHolder
+        })
+
+        -- Container for Tab Contents
+        local Container = Create("ScrollingFrame", {
+            Size = UDim2.new(1, -150, 1, -50),
+            Position = UDim2.new(0, 150, 0, 50),
+            Parent = MainWindow,
+            Visible = false
+        })
+
+        -- Add Content to Tab
+        -- (Add content management logic here)
+
+        return TabFunction
+    end
+
+    -- Finalize Window
+    return TabFunction
+end
+
+function OrionLib:Destroy()
+    Orion:Destroy()
+end
+
+return OrionLib
